@@ -1,5 +1,4 @@
 from pathlib import Path
-
 import streamlit as st
 import wikipedia
 from llama_index.core import VectorStoreIndex, StorageContext, load_index_from_storage
@@ -11,208 +10,225 @@ from llama_index.llms.openai import OpenAI
 from llama_index.readers.web import SimpleWebPageReader
 from pydantic import BaseModel
 
-wikipedia.set_lang("cs")
+system_prompt = "You are a movie recommender system."
 
-system_prompt = "You are amazing trip planner."
+llm_4_turbo = OpenAI(
+    model="gpt-4-turbo-preview", temperature=0, system_prompt=system_prompt, timeout=120
+)
+llm_3_turbo = OpenAI(
+    model="gpt-3.5-turbo-preview",
+    temperature=0,
+    system_prompt=system_prompt,
+    timeout=120,
+)
 
-llm_4_turbo = OpenAI(model="gpt-4-turbo-preview", temperature=0, system_prompt=system_prompt, timeout=120)
-
-cities = {
-    "Brno": {
-        "wiki_pages": [
-            "Brno",
-            "Pivovar Starobrno"
-        ],
+genres = {
+    "fantasy": {
+        "wiki_pages": ["Fantasy film"],
         "web_pages": [
-            "https://mendelmuseum.muni.cz/o-muzeu/mendelovo-muzeum",
-            "https://www.tmbrno.cz/vystavy-a-akce/vystavy/",
-            "https://www.alkoholium.cz/nejlepsi-bary-v-brne/",
-        ]
+            "https://www.imdb.com/search/title/?title_type=feature&genres=fantasy",
+            "https://editorial.rottentomatoes.com/guide/best-fantasy-movies-of-all-time",
+        ],
+    },
+    "comedy": {
+        "wiki_pages": ["Comedy film"],
+        "web_pages": [
+            "https://www.imdb.com/search/title/?genres=comedy&explore=title_type%2Cgenres",
+            "https://editorial.rottentomatoes.com/guide/essential-comedy-movies",
+        ],
+    },
+    "documentary": {
+        "wiki_pages": ["Documentary film"],
+        "web_pages": [
+            "https://www.imdb.com/search/title/?genres=documentary",
+            "https://topdocumentaryfilms.com",
+        ],
     },
 }
 
-group_types = [
-            "Family with Kids",
-            "Group of Python Developers",
-            "Bachelor party"
-        ]
+viewer_types = ["IT geek", "average human", "social life enjoyer"]
+
+social_settings = ["alone", "with friends", "with family", "with partner"]
+
+platforms = ["Netflix", "HBO", "Amazon Prime", "Disney+", "Apple TV"]
+
+movie_types = ["movie", "series", "multi-part movie"]
+
+already_seen_rating = {
+    "The Lord of the Rings: The Fellowship of the Ring": 10,
+    "The Lord of the Rings: The Two Towers": 9,
+    "The Lord of the Rings: The Return of the King": 8,
+    "Inception": 6,
+    "The Matrix": 9,
+    "The Hobbit: An Unexpected Journey": 8.5,
+    "The Dark Knight": 7,
+    "Interstellar": 4.5,
+    "Conan the Barbarian": 3.5,
+}
 
 
-class Attraction(BaseModel):
+class Movie(BaseModel):
     """
-    Attractions person can visit on a trip to given city.
-    Name must be exact name of a place person can visit. For example Mendelovo muzeum, Cukrárna BezCukru
-    Description should be a long text
+    Movie that can be recommended to the user. Name must be exact name of a movie. For example The Lord of the Rings: The Fellowship of the Ring.
+    Description should be a long text describing the movie.
     """
+
     name: str
     description: str
 
 
-class AttractionsInCity(BaseModel):
-    """List of attractions person can visit on a trip to given city"""
-    attractions: list[Attraction]
+class MoviesByGenre(BaseModel):
+    """List of movies of a given genre"""
+
+    movies: list[Movie]
 
 
-class ItineraryStop(BaseModel):
+class MovieDisplay(BaseModel):
     """
-    Itinerary stop on a trip to given city.
-    time_arrival and time_end MUST be in 24-hour format.
-    name and description should contain emojis.
-    name is specific attraction from itinerary
-    description describes activity which group can do there
+    Movie display for the user. Name should be exact name of a movie. For example The Lord of the Rings: The Fellowship of the Ring.
+    Name and description should contain emojis.
     """
 
-    time_arrival: str
-    time_end: str
     name: str
     description: str
 
 
-class TravelItinerary(BaseModel):
-    """Itinerary when visiting a given city consisting out of specific stops"""
+class MovieList(BaseModel):
+    """List of movies for the user to watch."""
 
-    stops: list[ItineraryStop]
+    movies: list[MovieDisplay]
 
 
-def gen_attractions(text: str) -> list[Attraction]:
-    summarizer = TreeSummarize(output_cls=AttractionsInCity, llm=llm_4_turbo)
-    places_in_city = summarizer.get_response(
-        "List separate attractions a person can enjoy when visiting the city, including pubs, restaurants, parks, and more.", [text]
+def gen_movies(text: str) -> list[Movie]:
+    summarizer = TreeSummarize(output_cls=MoviesByGenre, llm=llm_4_turbo)
+    movies_by_genre = summarizer.get_response(
+        "Recommend separate movies a person can watch.", [text]
     )
 
-    return places_in_city.attractions
+    return movies_by_genre.movies
 
 
-def get_attractions(city: str):
-    all_attractions = []
+def get_movies(genre: str):
+    all_movies = []
 
-    wiki_pages = cities[city]["wiki_pages"]
-    web_pages = cities[city]["web_pages"]
+    wiki_pages = genres[genre]["wiki_pages"]
+    web_pages = genres[genre]["web_pages"]
 
     for wiki_page in wiki_pages:
         print(f"Processing Wiki {wiki_page}")
         wiki_page_content = wikipedia.page(wiki_page).content
-        all_attractions += gen_attractions(wiki_page_content)
+        all_movies += gen_movies(wiki_page_content)
 
     for web_page in web_pages:
         print(f"Processing Web {web_page}")
-        web_page_content = SimpleWebPageReader(html_to_text=True).load_data(
-            [web_page]
-        )[0].text
-        all_attractions += gen_attractions(web_page_content)
+        web_page_content = (
+            SimpleWebPageReader(html_to_text=True).load_data([web_page])[0].text
+        )
+        all_movies += gen_movies(web_page_content)
 
-    return all_attractions
+    return all_movies
 
 
-def generate_itinerary(city: str, group_type, start_time, end_time):
-    print(city, group_type, start_time, end_time)
+def generate_recommendation(
+    genre: str,
+    viewer_type: str,
+    social_settings: str,
+    movie_type: str,
+    already_seen_ratings: dict,
+):  
+    print(genre, viewer_type)
 
-    index_dir_name = Path(f"./index_{city.lower()}/")
+    index_dir_name = Path(f"./index_{genre.lower()}/")
     if index_dir_name.exists():
         storage_context = StorageContext.from_defaults(persist_dir=index_dir_name)
 
-        places_index = load_index_from_storage(storage_context)
+        movies_index = load_index_from_storage(storage_context)
     else:
-        all_attractions = get_attractions(city)
+        all_movies = get_movies(genre)
 
-        places_nodes = [TextNode(text=f"{p.name} - {p.description}") for p in all_attractions]
-        places_index = VectorStoreIndex(places_nodes)
+        movies_nodes = [
+            TextNode(text=f"{p.name} - {p.description}") for p in all_movies
+        ]
+        movies_index = VectorStoreIndex(movies_nodes)
 
-        places_index.storage_context.persist(persist_dir=index_dir_name)
+        movies_index.storage_context.persist(persist_dir=index_dir_name)
 
-    def check_opening_hours_tomorrow(place_name: str) -> bool:
-        """
-        Checks opening hours of place_name.
-        Returns True if Place is open tomorrow.
-        """
-        pass
+    # def load_wikipedia_details(movie: str) -> bool:
+    #     """
+    #     Loads additional information from Wikipedia
+    #     """
+    #     pass
 
-    def load_wikipedia_details(place_name: str) -> bool:
-        """
-        Loads information from Wikipedia
-        """
-        pass
+    # def check_platform(movie: str, plarform: str) -> bool:
+    #     """
+    #     Checks if the movie is available on the platform
+    #     """
+    #     pass
 
     query_engine_tools = [
         RetrieverTool(
-            places_index.as_retriever(similarity_top_k=3),
+            movies_index.as_retriever(similarity_top_k=20),
             metadata=ToolMetadata(
-                name="city_places_list",
-                description=(
-                    "Searches interesting places in city based on place's description."
-                    "Use detailed description what places are you looking for with examples."
-                    "Describe if you are looking for restaurants, museums etc."
-                ),
+                name="movies_list",
+                description=("Retrieves movies from the index based on the query."),
             ),
         ),
     ]
 
     # query_engine_tools += [FunctionTool.from_defaults(fn=load_wikipedia_details)]
-    # query_engine_tools += [FunctionTool.from_defaults(fn=check_opening_hours_tomorrow)]
+    # query_engine_tools += [FunctionTool.from_defaults(fn=check_platform)]
 
     agent_prompt = f"""
-    Generate complete travel itinerary, starting at {start_time} and ending at {end_time} to a single day trip to {city}.
-    Trip is prepared for {group_type}.
-    Divide day into multiple parts and use tools for each of them separately.
-    Think about attractions and places to eat.
-    Mention concrete attractions you find using tools.
-    Ensure activities start at {start_time}.
-    Ensure activities are planned until {end_time}.
+    Generate complete movie recommendation prepared for a {viewer_type} of genre {genre}.
+    The film should be suitable for social setting {social_settings}. It should be a {movie_type}.
+    Check the {already_seen_ratings} for the movies already seen by the viewer and use the ratings to recommend new movies.
+    The rating in the dictionary is out of 10. 0 being the lowest and 10 being the highest.
+    Don't recommend movies that have already been seen by the viewer.
+    Divide each movie into parts and use tools for each of them separately.
+    For each movie list name, description and year. Use emojis in description and name.
+    Describe why you think the viewer would enjoy the movie.
+    Try to recommend 3 movies.
     """
 
-    agent = ReActAgent.from_tools(query_engine_tools, llm=llm_4_turbo, verbose=True, max_iterations=20)
+    agent = ReActAgent.from_tools(
+        query_engine_tools, llm=llm_4_turbo, verbose=True, max_iterations=20
+    )
     agent_response = agent.chat(agent_prompt).response
-    print(agent_response)
 
-    # wiki_prompt = """
-    # Try to add enhance information to places we visit from Wikipedia.
-    # """
-    # agent_response = agent.chat(wiki_prompt).response
-    # print(agent_response)
-
-    summarizer = TreeSummarize(output_cls=TravelItinerary, llm=llm_4_turbo)
-    response = summarizer.get_response("Parse travel itinerary", [agent_response])
+    summarizer = TreeSummarize(output_cls=MovieList, llm=llm_4_turbo)
+    response = summarizer.get_response("Parse movie list", [agent_response])
 
     print(agent_response)
 
-    return response.stops
+    return response.movies
 
 
 def main():
-    st.title("City Trip Planner")
+    st.title("Movie Recommendation System")
 
-    city = st.selectbox(
-        "Choose the city for your trip:",
-        cities.keys(),
-        index=0
-    )
+    genre = st.selectbox("Choose a genre of movies:", genres.keys(), index=0)
 
-    group_type = st.radio(
-        "Who is traveling?",
-        group_types
-    )
+    viewer_type = st.radio("Who is watching?", viewer_types)
 
-    start_time = st.selectbox(
-        "Select the start time of your visit:",
-        [f"{i}:00" for i in range(24)],  # 0:00 to 23:00
-        index=8
-    )
+    social_setting = st.radio("Social setting:", social_settings)
 
-    end_time = st.selectbox(
-        "Select the end time of your visit:",
-        [f"{i}:00" for i in range(24)],
-        index=17
-    )
-    if st.button('Generate Trip Itinerary'):
-        itinerary = generate_itinerary(city, group_type, start_time, end_time)
+    movie_type = st.radio("Type of movie:", movie_types)
 
-        st.subheader(f'Travel Itinerary for *{group_type}* to *{city}* ', divider='rainbow')
-        for item in itinerary:
-            st.text_area(
-                f"{item.time_arrival} - {item.time_end}: **{item.name}**",
-                item.description
-            )
+    # platform = st.radio("Platform:", platforms)
+
+    if st.button("Recommend Movies"):
+        movie_list = generate_recommendation(
+            genre, viewer_type, social_setting, movie_type, already_seen_rating
+        )
+
+        st.subheader(
+            f"Movies Recommended for *{viewer_type}* of genre *{genre}* ",
+            divider="rainbow",
+        )
+        for item in movie_list:
+            st.text_area(f"**{item.name}**", item.description)
 
 
 if __name__ == "__main__":
+    # generate_recommendation("fantasy", "IT geek", "with partner", "movie", already_seen_rating)
     main()

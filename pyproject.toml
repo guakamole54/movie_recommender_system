@@ -1,11 +1,11 @@
 [tool.poetry]
-name = "pyconsk-workshop"
+name = "movie_recommender_system"
 version = "0.1.0"
 description = ""
-authors = ["Pavel Kral <pavel@pavelkral.eu>"]
+authors = ["Robert Mudron <mudronrobert@gmail.com>"]
 license = "GPL"
 readme = "README.md"
-packages = [{include = "pyconsk_workshop"}]
+packages = [{include = "movie_recommender_system"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
